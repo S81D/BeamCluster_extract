@@ -11,7 +11,7 @@
 void extract_data(int run_number) {
 
     // Construct the filename using the run number
-    TString directory = "/pnfs/annie/persistent/processed/BeamClusterTrees/";
+    TString directory = "/pnfs/annie/persistent/processed/processingData_EBV2/BeamClusterTrees/";
     TString fileName = TString::Format("BeamCluster_%d.root", run_number);
 
     // Open the ROOT file
@@ -25,14 +25,14 @@ void extract_data(int run_number) {
     // -----------------------------------------------------
 
     // TFile *outputFile = new TFile("TEST.root", "RECREATE");
-    TString outputDir = "2024_usable_data/";
+    TString outputDir = "data/";
     TString outputFileName = outputDir + TString::Format("R%d_extracted_data.ntuple.root", run_number);
     TFile *outputFile = new TFile(outputFileName, "RECREATE");
     TTree *outputTree = new TTree("data", "Filtered data");
 
     Float_t CT, CT_minus_BRF, CPE, QB, POT, first_peak_fit;
     std::vector<double> hitT, hitPE, hitID, hitX, hitY, hitZ;
-    Int_t isBrightest, MRD_Track, CH, Coinc, NV, part_file, MRD_activity;
+    Int_t isBrightest, MRD_Track, CH, Coinc, NV, part_file, MRD_activity, FMV_activity, hadExtended, only_prompt_cluster, throughgoing;
     Long64_t event_number, cluster_Number, number_of_clusters;
 
     // branches of the output tree
@@ -51,8 +51,12 @@ void extract_data(int run_number) {
     outputTree->Branch("event_number", &event_number, "event_number/L");
     outputTree->Branch("number_of_clusters", &number_of_clusters, "number_of_clusters/L");
     outputTree->Branch("cluster_Number", &cluster_Number, "cluster_Number/L");
+    outputTree->Branch("only_prompt_cluster", &only_prompt_cluster, "only_prompt_cluster/I");
     outputTree->Branch("MRD_activity", &MRD_activity, "MRD_activity/I");
+	outputTree->Branch("FMV_activity", &FMV_activity, "FMV_activity/I");
     outputTree->Branch("BRFFirstPeakFit", &first_peak_fit, "BRFFirstPeakFit/F");
+    outputTree->Branch("hadExtended", &hadExtended, "hadExtended/I");
+	outputTree->Branch("MRDThrough", &throughgoing, "MRDThrough/I");  
 
     outputTree->Branch("hitT", "std::vector<double>", &hitT);
     outputTree->Branch("hitPE", "std::vector<double>", &hitPE);
@@ -74,11 +78,13 @@ void extract_data(int run_number) {
     std::vector<std::vector<double>>* Cluster_HitX = nullptr;
     std::vector<std::vector<double>>* Cluster_HitY = nullptr;
     std::vector<std::vector<double>>* Cluster_HitZ = nullptr;
-    std::vector<double>* MRDhitDetID = nullptr;
-    Int_t partFileNumber, beam_ok, TankMRDCoinc, NoVeto, eventNumber, numberOfClusters;
+    std::vector<double>* MRDhitT = nullptr;
+	std::vector<double>* FMVhitT = nullptr;
+    Int_t partFileNumber, beam_ok, TankMRDCoinc, NoVeto, eventNumber, numberOfClusters, Extended, BunchRotationOn;
     Double_t BRF_fit, beam_pot_875;
     std::vector<int>* GroupedTriggerWord = 0;
     std::vector<int>* tracks = 0;
+	std::vector<bool>* Thru = 0;
     std::vector<ULong64_t>* GroupedTriggerTime = nullptr;
     ULong64_t eventTimeTank;
 
@@ -104,12 +110,16 @@ void extract_data(int run_number) {
     tree->SetBranchAddress("GroupedTriggerTime", &GroupedTriggerTime);
     tree->SetBranchAddress("beam_ok", &beam_ok);
     tree->SetBranchAddress("beam_pot_875", &beam_pot_875);
+    tree->SetBranchAddress("BunchRotationOn", &BunchRotationOn);
     tree->SetBranchAddress("NumClusterTracks", &tracks);
     tree->SetBranchAddress("numberOfClusters", &numberOfClusters);
     tree->SetBranchAddress("TankMRDCoinc", &TankMRDCoinc);
     tree->SetBranchAddress("NoVeto", &NoVeto);
-    tree->SetBranchAddress("MRDhitDetID", &MRDhitDetID);
+    tree->SetBranchAddress("MRDhitT", &MRDhitT);
+	tree->SetBranchAddress("FMVhitT", &FMVhitT);
     tree->SetBranchAddress("eventTimeTank", &eventTimeTank);
+    tree->SetBranchAddress("Extended", &Extended);
+	tree->SetBranchAddress("MRDThrough", &Thru);
 
 
     Long64_t totalclusters = 0;
@@ -117,6 +127,7 @@ void extract_data(int run_number) {
 
     Long64_t clustercount = 0;
     Long64_t eventcount = 0;
+
 
     // Loop over events in the tree
     for (int i = 0; i < tree->GetEntries(); i++) {
@@ -137,19 +148,25 @@ void extract_data(int run_number) {
             continue;
         }
 
-        // only want events with "good" beam (0.5e12 < pot < 8e12)
-        if (beam_ok == 1) {
+        // only want events with "good" beam (0.5e12 < pot < 8e12, 172 < horn current < 176)
+        if (beam_ok == 1) {   // before run 4000, beam_ok was routinely == 0 (maybe its missing a device)
+                              // TODO: consider relaxing this condition for older beam data
 
-            // also only want events with 1. a usable BRF signal (rising edge was found) and 2. eventTimeTank != 0
-            if (eventTimeTank == 0 || BRF_fit == 0){
+            // also only want events with 1. a usable BRF signal (rising edge was found) 2. eventTimeTank != 0 and 3. BunchRotation OFF
+            if (eventTimeTank == 0 || BRF_fit == 0 || BunchRotationOn == 1){
                 continue;
             }
 
+            // find brightest cluster and how many are in the prompt window
             Double_t maxPE = 0;
+            int clusters_in_prompt = 0;
             size_t brightestIndex = 0;
             for (size_t j = 0; j < clusterPE->size(); j++) {
                 Double_t pe = clusterPE->at(j);  // Access PE value directly
-                if (pe > maxPE) {
+                if (clusterTime->at(j) < 2000) { // cluster is in prompt window
+                    clusters_in_prompt++;
+                }
+                if (pe > maxPE) {                // brightest cluster
                     maxPE = pe;
                     brightestIndex = j;
                 }
@@ -164,19 +181,35 @@ void extract_data(int run_number) {
                 MRD_Track = 0;
             }
 
+			// check if tracks are throughgoing
+			if (std::find(Thru->begin(), Thru->end(), true) != Thru->end()) {
+				throughgoing = 1;
+			} else {
+				throughgoing = 0;
+			}
+
             // check if there is any MRD activity (hits vector will be blank if there is none)
-            if (MRDhitDetID && MRDhitDetID->empty()) {
+            if (MRDhitT && MRDhitT->empty()) {
                 MRD_activity = 0;
-            } else if (MRDhitDetID) {
+            } else if (MRDhitT) {
                 MRD_activity = 1;
             }
+
+			// check if there is FMV activity
+			if (FMVhitT && FMVhitT->empty()) {
+                FMV_activity = 0;
+            } else if (FMVhitT) {
+                FMV_activity = 1;
+            }
+
 
             part_file = partFileNumber;
             event_number = eventNumber;
             number_of_clusters = numberOfClusters;
             Coinc = TankMRDCoinc;
             NV = NoVeto;
-            POT = beam_pot_875;
+            POT = beam_pot_875;        // counting POT via TOR875
+            hadExtended = Extended;
 
             // BRF first peak fit - shows the beam jitter
             first_peak_fit = BRF_fit;
@@ -199,7 +232,8 @@ void extract_data(int run_number) {
                 CH = clusterHits->at(j);
                 isBrightest = (j == brightestIndex) ? 1 : 0;
                 cluster_Number = j;
-                
+
+                only_prompt_cluster = (clusterTime->at(j) < 2000 && clusters_in_prompt == 1) ? 1 : 0;
         
                 hitT.clear(); hitPE.clear(); hitID.clear(); hitX.clear(); hitY.clear(); hitZ.clear();
                 hitT = Cluster_HitT->at(j);
