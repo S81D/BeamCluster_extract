@@ -81,7 +81,7 @@ void extract_data(int run_number) {
     std::vector<double>* MRDhitT = nullptr;
 	std::vector<double>* FMVhitT = nullptr;
     Int_t partFileNumber, beam_ok, TankMRDCoinc, NoVeto, eventNumber, numberOfClusters, Extended, BunchRotationOn;
-    Double_t BRF_fit, beam_pot_875;
+    Double_t BRF_fit, beam_pot_875, beam_pot_860, beam_THCURR;
     std::vector<int>* GroupedTriggerWord = 0;
     std::vector<int>* tracks = 0;
 	std::vector<bool>* Thru = 0;
@@ -109,7 +109,9 @@ void extract_data(int run_number) {
     tree->SetBranchAddress("GroupedTriggerWord", &GroupedTriggerWord);
     tree->SetBranchAddress("GroupedTriggerTime", &GroupedTriggerTime);
     tree->SetBranchAddress("beam_ok", &beam_ok);
-    tree->SetBranchAddress("beam_pot_875", &beam_pot_875);
+    tree->SetBranchAddress("beam_pot_875", &beam_pot_875);    // this is the defaukt POT set in the BC files --> consider changing it to the most appropriate toroid
+    tree->SetBranchAddress("beam_E_TOR860", &beam_pot_860);
+    tree->SetBranchAddress("beam_THCURR", &beam_THCURR);
     tree->SetBranchAddress("BunchRotationOn", &BunchRotationOn);
     tree->SetBranchAddress("NumClusterTracks", &tracks);
     tree->SetBranchAddress("numberOfClusters", &numberOfClusters);
@@ -148,9 +150,23 @@ void extract_data(int run_number) {
             continue;
         }
 
-        // only want events with "good" beam (0.5e12 < pot < 8e12, 172 < horn current < 176)
-        if (beam_ok == 1) {   // before run 4000, beam_ok was routinely == 0 (maybe its missing a device)
-                              // TODO: consider relaxing this condition for older beam data
+        // for runs prior to 4000, horn current > 176 so beam_ok = False --> calculate the beam_ok condition by hand with a higher threshold
+        Int_t beam_good = 0;
+        if (run_number >= 4000) {
+            if (beam_ok == 1) {
+                beam_good = 1;
+            }
+        } else {
+            if (beam_THCURR > 172 && beam_THCURR < 178) {   // raise the upper threshold for beam_ok from 176 to 178
+                if (beam_pot_860 > 0.5 && beam_pot_860 < 8.0 &&
+                    beam_pot_875 > 0.5 && beam_pot_875 < 8.0 &&
+                    ((beam_pot_875 - beam_pot_860) / beam_pot_860) < 0.05) {
+                    beam_good = 1;
+                }
+            }
+        }
+
+        if (beam_good == 1) {
 
             // also only want events with 1. a usable BRF signal (rising edge was found) 2. eventTimeTank != 0 and 3. BunchRotation OFF
             if (eventTimeTank == 0 || BRF_fit == 0 || BunchRotationOn == 1){
