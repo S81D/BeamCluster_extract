@@ -11,7 +11,7 @@
 void extract_data(int run_number) {
 
     // Construct the filename using the run number
-    TString directory = "/pnfs/annie/persistent/processed/processingData_EBV2/BeamClusterTrees/";
+    TString directory = "/pnfs/annie/persistent/users/doran/datasets/NCQE_BEAMCLUSTER_DATA/";
     TString fileName = TString::Format("BeamCluster_%d.root", run_number);
 
     // Open the ROOT file
@@ -25,12 +25,12 @@ void extract_data(int run_number) {
     // -----------------------------------------------------
 
     // TFile *outputFile = new TFile("TEST.root", "RECREATE");
-    TString outputDir = "data/";
+    TString outputDir = "FY22_23/";
     TString outputFileName = outputDir + TString::Format("R%d_extracted_data.ntuple.root", run_number);
     TFile *outputFile = new TFile(outputFileName, "RECREATE");
     TTree *outputTree = new TTree("data", "Filtered data");
 
-    Float_t CT, CT_minus_BRF, CPE, QB, POT, first_peak_fit;
+    Float_t CT, CT_minus_BRF, CPE, QB, POT, first_peak_fit, recoVtx, recoVty, recoVtz;
     std::vector<double> hitT, hitPE, hitID, hitX, hitY, hitZ;
     Int_t isBrightest, MRD_Track, CH, Coinc, NV, part_file, MRD_activity, FMV_activity, hadExtended, only_prompt_cluster, throughgoing;
     Long64_t event_number, cluster_Number, number_of_clusters;
@@ -42,6 +42,9 @@ void extract_data(int run_number) {
     outputTree->Branch("cluster_Qb", &QB, "cluster_Qb/F");
     outputTree->Branch("cluster_Hits", &CH, "cluster_Hits/I");
     outputTree->Branch("cluster_time_BRF", &CT_minus_BRF, "cluster_time_BRF/F");
+    outputTree->Branch("recoVtx", &recoVtx, "recoVtx/F");
+    outputTree->Branch("recoVty", &recoVty, "recoVty/F");
+    outputTree->Branch("recoVtz", &recoVtz, "recoVtz/F");
     outputTree->Branch("isBrightest", &isBrightest, "isBrightest/I");
     outputTree->Branch("MRD_Track", &MRD_Track, "MRD_Track/I");
     outputTree->Branch("TankMRDCoinc", &Coinc, "TankMRDCoinc/I");
@@ -80,6 +83,9 @@ void extract_data(int run_number) {
     std::vector<std::vector<double>>* Cluster_HitZ = nullptr;
     std::vector<double>* MRDhitT = nullptr;
 	std::vector<double>* FMVhitT = nullptr;
+    std::vector<double>* rVtx = nullptr;
+    std::vector<double>* rVty = nullptr;
+    std::vector<double>* rVtz = nullptr;
     Int_t partFileNumber, beam_ok, TankMRDCoinc, NoVeto, eventNumber, numberOfClusters, Extended, BunchRotationOn;
     Double_t BRF_fit, beam_pot_875, beam_pot_860, beam_THCURR;
     std::vector<int>* GroupedTriggerWord = 0;
@@ -105,11 +111,14 @@ void extract_data(int run_number) {
     tree->SetBranchAddress("Cluster_HitX", &Cluster_HitX);
     tree->SetBranchAddress("Cluster_HitY", &Cluster_HitY);
     tree->SetBranchAddress("Cluster_HitZ", &Cluster_HitZ);
+    tree->SetBranchAddress("recoLeastSqVtxX", &rVtx);
+    tree->SetBranchAddress("recoLeastSqVtxY", &rVty);
+    tree->SetBranchAddress("recoLeastSqVtxZ", &rVtz);
     tree->SetBranchAddress("BRFFirstPeakFit", &BRF_fit);
     tree->SetBranchAddress("GroupedTriggerWord", &GroupedTriggerWord);
     tree->SetBranchAddress("GroupedTriggerTime", &GroupedTriggerTime);
     tree->SetBranchAddress("beam_ok", &beam_ok);
-    tree->SetBranchAddress("beam_pot_875", &beam_pot_875);    // this is the defaukt POT set in the BC files --> consider changing it to the most appropriate toroid
+    tree->SetBranchAddress("beam_pot_875", &beam_pot_875); 
     tree->SetBranchAddress("beam_E_TOR860", &beam_pot_860);
     tree->SetBranchAddress("beam_THCURR", &beam_THCURR);
     tree->SetBranchAddress("BunchRotationOn", &BunchRotationOn);
@@ -129,6 +138,9 @@ void extract_data(int run_number) {
 
     Long64_t clustercount = 0;
     Long64_t eventcount = 0;
+
+    // TOR860
+    Double_t total_POT = 0.0;
 
 
     // Loop over events in the tree
@@ -173,6 +185,9 @@ void extract_data(int run_number) {
                 continue;
             }
 
+            // only sum POT from recorded triggers with good beam conditions
+            total_POT += beam_pot_860;
+
             // find brightest cluster and how many are in the prompt window
             Double_t maxPE = 0;
             int clusters_in_prompt = 0;
@@ -204,27 +219,12 @@ void extract_data(int run_number) {
 				throughgoing = 0;
 			}
 
-            // check if there is any MRD activity (hits vector will be blank if there is none)
-            if (MRDhitT && MRDhitT->empty()) {
-                MRD_activity = 0;
-            } else if (MRDhitT) {
-                MRD_activity = 1;
-            }
-
-			// check if there is FMV activity
-			if (FMVhitT && FMVhitT->empty()) {
-                FMV_activity = 0;
-            } else if (FMVhitT) {
-                FMV_activity = 1;
-            }
-
-
             part_file = partFileNumber;
             event_number = eventNumber;
             number_of_clusters = numberOfClusters;
             Coinc = TankMRDCoinc;
             NV = NoVeto;
-            POT = beam_pot_875;        // counting POT via TOR875
+            POT = beam_pot_860;        // counting POT via TOR860
             hadExtended = Extended;
 
             // BRF first peak fit - shows the beam jitter
@@ -249,6 +249,34 @@ void extract_data(int run_number) {
                 isBrightest = (j == brightestIndex) ? 1 : 0;
                 cluster_Number = j;
 
+                // modified MRD / Veto activity logic
+                MRD_activity = 0;
+                FMV_activity = 0;
+                double cluster_t = clusterTime->at(j);
+                // if any MRD or veto hits are within this coincidence window, flag it
+                if (MRDhitT) {
+                    for (const auto& hit_t : *MRDhitT) {
+                        double dt = hit_t - cluster_t;
+                        if (dt >= 700.0 && dt <= 1000.0) {
+                            MRD_activity = 1;
+                            break;  // stop once we find one
+                        }
+                    }
+                }
+                if (FMVhitT) {
+                    for (const auto& hit_t : *FMVhitT) {
+                        double dt = hit_t - cluster_t;
+                        if (dt >= 700.0 && dt <= 1000.0) {
+                            FMV_activity = 1;
+                            break;
+                        }
+                    }
+                }
+
+                recoVtx = rVtx->at(j);
+                recoVty = rVty->at(j);
+                recoVtz = rVtz->at(j);
+
                 only_prompt_cluster = (clusterTime->at(j) < 2000 && clusters_in_prompt == 1) ? 1 : 0;
         
                 hitT.clear(); hitPE.clear(); hitID.clear(); hitX.clear(); hitY.clear(); hitZ.clear();
@@ -267,9 +295,33 @@ void extract_data(int run_number) {
 
     std::cout << std::endl;
     std::cout << run_number << " total events (clusters): " << totalevents << " (" << totalclusters << ")" << std::endl;
+    std::cout << "POT: " << total_POT << "e12" << std::endl;
     std::cout << std::endl;
 
+
     // Finalize output
+
+    // Save POT information to CSV file
+    TString potCSVFile = outputDir + "POT_summary.csv";
+    std::ofstream potFile;
+
+    // Check if file exists to determine if we need to write header
+    bool fileExists = (gSystem->AccessPathName(potCSVFile) == 0);
+
+    potFile.open(potCSVFile.Data(), std::ios::app);
+    if (potFile.is_open()) {
+        // Write header if file is new
+        if (!fileExists) {
+            potFile << "RUN,TOR860_POTe12" << std::endl;
+        }
+        // Write data
+        potFile << run_number << "," << std::scientific << total_POT << std::endl;
+        potFile.close();
+        //std::cout << "POT data appended to " << potCSVFile << std::endl;
+    } else {
+        std::cerr << "Failed to open POT CSV file: " << potCSVFile << std::endl;
+    }
+
     outputTree->Write();
     outputFile->Close();
     inputFile->Close();
